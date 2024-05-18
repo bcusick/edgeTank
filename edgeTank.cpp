@@ -13,6 +13,12 @@
 
 #include "Helpers.h"
 #include <Arduino_EdgeControl.h>
+#include "shared.hpp"
+
+// The MKR1 board I2C address
+#define MKR1_I2C_ADDR 0x05
+
+SensorValues_t sensorData; //stucture to hold All data passed between Edge and NB
 
 void pwrUp ();
 void pwrDown ();
@@ -61,7 +67,7 @@ void setup()
   // set up the LCD's number of columns and rows:
   LCD.begin(16, 2);
   LCD.backlight();
-  setSystemClock(__DATE__, __TIME__);  // define system time as a reference for the RTC
+  //setSystemClock(__DATE__, __TIME__);  // define system time as a reference for the RTC
 
   //printNow = time(NULL); //change to RTCauto rtcTime = time(NULL
   
@@ -71,25 +77,27 @@ void setup()
 
 void loop(){
     auto vbat = Power.getVBat();
-    auto now = time(NULL);
-    if ((now - then) > printNow) {
-        Serial.println("looping...");
-        auto vbat = Power.getVBat();
+    
+    //Serial.println("looping...");
+    
 
-        LCD.setCursor(0, 0);
-        LCD.print("Battery: ");
+    LCD.setCursor(0, 0);
+    LCD.print("Battery: ");
+    
+    LCD.setCursor(9, 0);
+    LCD.print(vbat);
+    LCD.setCursor(14, 0);
+    LCD.print("V");
+    
+
+    getCloudValues();
+    Serial.println(sensorData.epoch);
+    set_time(sensorData.epoch);
+
+    LCD.setCursor(0, 1);
+    LCD.print(getLocalhour());
         
-        LCD.setCursor(9, 0);
-        LCD.print(vbat);
-        LCD.setCursor(14, 0);
-        LCD.print("V");
         
-        LCD.setCursor(0, 1);
-        LCD.print(getLocalhour());
-        
-        then = now;
-       
-    }
     if (vbat < UVLO){
       Serial.println("battery offline");
       pwrDown();
@@ -134,3 +142,60 @@ void pwrDown () { //need to decide what to power down on low battery.  Still wan
 
 }
 
+/*
+// Function to send SensorValues_t structure
+void sendSensorValues(const SensorValues_t &values) {
+  Wire.beginTransmission(MKR1_I2C_ADDR); // Slave address
+  Wire.write((byte *)&values, sizeof(values));
+  Wire.endTransmission();
+}
+
+
+// Function to receive SensorValues_t structure
+void receiveSensorValues(SensorValues_t &values) {
+  Wire.requestFrom(8, sizeof(values)); // Master's address and size of data
+  byte *ptr = (byte *)&values;
+  for (int i = 0; i < sizeof(values); i++) {
+    *ptr++ = Wire.read();
+  }
+}
+
+// Callback function for request event
+void requestEvent() {
+  
+  // Get sensor data (e.g., from sensors connected to this Arduino)
+  // Populate sensorData with actual sensor readings
+  // For now, let's just send some dummy values
+  sensorData.temperature = 25.5;
+  sensorData.humidity = 50.5;
+  sensorData.pressure = 1013;
+
+  // Send sensor data to master
+  Wire.write((byte *)&sensorData, sizeof(sensorData));
+}
+*/
+void getCloudValues() {
+
+  Wire.beginTransmission(MKR1_I2C_ADDR);  //slave's 7-bit I2C address
+
+  // asking if the MKR board is connected to be able to communicate
+  byte busStatus = Wire.endTransmission();
+
+  if (busStatus != 0) {  
+    Serial.println("Can't find I2C");// if the slave is not connected this happens
+
+  } else {  // if the slave is connected this happens
+
+    Wire.requestFrom(MKR1_I2C_ADDR, sizeof(SensorValues_t));
+
+    uint8_t buf[200];
+    for (uint8_t i = 0; i < sizeof(SensorValues_t); i++)
+      if (Wire.available())
+        buf[i] = Wire.read();
+
+    SensorValues_t *values = (SensorValues_t *)buf;
+
+    sensorData.epoch = values->epoch; //time
+    }
+
+  }
