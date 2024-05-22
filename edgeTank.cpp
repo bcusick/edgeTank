@@ -58,8 +58,7 @@ void loop(){
 
     getMKR1Values();
     checkTime();
-    Serial.println(sensorData.epoch);
-    set_time(sensorData.epoch);
+    
 
     LCD.setCursor(0, 1);
     LCD.print(getLocalhour());
@@ -101,7 +100,7 @@ void initBoard () {
   
   Power.on(PWR_MKR1);
   Power.on(PWR_19V);
-  delay(5000);
+  delay(5000);  //wait for peripherals to boot
   Wire.begin();
 
   // Init Edge Control IO Expander
@@ -214,12 +213,22 @@ float vBat() {
   return(Power.getVBat(12) / vBatCal);
 }
 
-/*
-void checkTime() {
-  uint32_t timeDiff = 60 *60 + 10; //1 hour and 10 seconds.  accounts for 1 hr. daylight savings update.
 
-    Serial.println(sensorData.epoch);
-    set_time(sensorData.epoch);
+void checkTime() {
+
+  getMKR1Values();
+
+  unsigned long localTime = time(NULL);
+  unsigned long remoteTime = sensorData.epoch;
+  unsigned long oneHour = 3600; // One hour in seconds
+  unsigned long fiveMinutes = 300; // Five minutes in seconds
+
+  if (remoteTime > localTime || //initial time sync
+      (abs(remoteTime - localTime) >= (oneHour - fiveMinutes) &&   //handle daylight savings update 
+       abs(remoteTime - localTime) <= (oneHour + fiveMinutes))) {
+    set_time(remoteTime);
+    
+    Serial.println("RTC updated from Remote");
   }
 
-  */
+  
