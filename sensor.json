@@ -1,0 +1,27 @@
+{
+  "timestamp": 123456,
+  "sensors": {
+    "temperature": {
+      "value": 23.5,
+      "unit": "C"
+    },
+    "humidity": {
+      "value": 45.0,
+      "unit": "%"
+    },
+    "pressure": {
+      "value": 1013,
+      "unit": "hPa"
+    },
+    "light": {
+      "value": 300,
+      "unit": "lux"
+    },
+    "sound": {
+      "value": 50,
+      "unit": "dB"
+    }
+  }
+}
+
+
