@@ -22,6 +22,8 @@ SensorValues_t sensorData; //stucture to hold All data passed between Edge and N
 
 void pwrUp ();
 void pwrDown ();
+void initBoard ();
+float vBat();
 
 constexpr uint32_t printInterval { 1000 };
 uint32_t printNow { 0 };
@@ -29,22 +31,79 @@ int status12v = 0;
 float UVLO = 11.0;
 float UVLO_restart = 11.5;
 auto then = time(NULL);
+float vBatCal = 1.045;
 
 void setup()
 {
+  
+  
+  initBoard();
+  
+}
+
+void loop(){
+    auto vbat = vBat();
+    
+    //Serial.println("looping...");
+    
+
+    LCD.setCursor(0, 0);
+    LCD.print("Battery: ");
+    
+    LCD.setCursor(9, 0);
+    LCD.print(vbat);
+    LCD.setCursor(14, 0);
+    LCD.print("V");
+    
+
+    getMKR1Values();
+    checkTime();
+    Serial.println(sensorData.epoch);
+    set_time(sensorData.epoch);
+
+    LCD.setCursor(0, 1);
+    LCD.print(getLocalhour());
+    LCD.setCursor(13, 1);
+    LCD.print(getDay());
+        
+        
+    if (vbat < UVLO){
+      Serial.println("battery offline");
+      pwrDown();
+      while(vbat < UVLO_restart){
+        Power.on(PWR_VBAT);
+        delay(1000);
+        vbat = vBat();
+        //Serial.println(vbat);
+        Power.off(PWR_VBAT);   
+        delay(1000); //check once a minute
+      }
+      initBoard();
+      
+      Serial.println("battery online");
+      
+      
+    }
+
+      //while(!Power.status(PWR_VBAT)){
+        
+}
+      
+void initBoard () {
   EdgeControl.begin();
-  Wire.begin();
   Serial.begin(115200);
-  delay(500);
+  
  
-  delay(500);
+  
   Power.on(PWR_3V3);
-  while (!Power.status(PWR_3V3));
+  
   Power.on(PWR_VBAT);
-  while(!Power.status(PWR_VBAT));
+  
   Power.on(PWR_MKR1);
   Power.on(PWR_19V);
-   
+  delay(5000);
+  Wire.begin();
+
   // Init Edge Control IO Expander
   Serial.print("IO Expander initializazion ");
   if (!Expander.begin()) {
@@ -70,57 +129,8 @@ void setup()
   //setSystemClock(__DATE__, __TIME__);  // define system time as a reference for the RTC
 
   //printNow = time(NULL); //change to RTCauto rtcTime = time(NULL
-  
-  //initBoard();
-  
+
 }
-
-void loop(){
-    auto vbat = Power.getVBat();
-    
-    //Serial.println("looping...");
-    
-
-    LCD.setCursor(0, 0);
-    LCD.print("Battery: ");
-    
-    LCD.setCursor(9, 0);
-    LCD.print(vbat);
-    LCD.setCursor(14, 0);
-    LCD.print("V");
-    
-
-    getCloudValues();
-    Serial.println(sensorData.epoch);
-    set_time(sensorData.epoch);
-
-    LCD.setCursor(0, 1);
-    LCD.print(getLocalhour());
-        
-        
-    if (vbat < UVLO){
-      Serial.println("battery offline");
-      pwrDown();
-      while(vbat < UVLO_restart){
-        Power.on(PWR_VBAT);
-        delay(5000);
-        vbat = Power.getVBat();
-        Serial.println(vbat);
-        Power.off(PWR_VBAT);   
-        delay(5000); //check once a minute
-      }
-      pwrUp();
-      Serial.println("battery online");
-      LCD.begin(16, 2);
-      LCD.backlight();
-      
-    }
-
-      //while(!Power.status(PWR_VBAT)){
-        
-}
-      
-    
 
 void pwrUp () {
   
@@ -174,7 +184,7 @@ void requestEvent() {
   Wire.write((byte *)&sensorData, sizeof(sensorData));
 }
 */
-void getCloudValues() {
+void getMKR1Values() {
 
   Wire.beginTransmission(MKR1_I2C_ADDR);  //slave's 7-bit I2C address
 
@@ -185,7 +195,7 @@ void getCloudValues() {
     Serial.println("Can't find I2C");// if the slave is not connected this happens
 
   } else {  // if the slave is connected this happens
-
+    Serial.println("MKR1 found");
     Wire.requestFrom(MKR1_I2C_ADDR, sizeof(SensorValues_t));
 
     uint8_t buf[200];
@@ -199,3 +209,17 @@ void getCloudValues() {
     }
 
   }
+
+float vBat() {
+  return(Power.getVBat(12) / vBatCal);
+}
+
+/*
+void checkTime() {
+  uint32_t timeDiff = 60 *60 + 10; //1 hour and 10 seconds.  accounts for 1 hr. daylight savings update.
+
+    Serial.println(sensorData.epoch);
+    set_time(sensorData.epoch);
+  }
+
+  */

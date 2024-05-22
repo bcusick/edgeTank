@@ -45,6 +45,49 @@ String getLocalhour()
     return String(buffer);
 }
 
+
+String getDay()
+{
+    //char buffer[32];
+    tm t;
+    _rtc_localtime(time(NULL), &t, RTC_FULL_LEAP_YEAR_SUPPORT);
+    //strftime(buffer, 32, "%k:%M:%S", &t);
+
+    // Get the day of the week (0 = Sunday, 1 = Monday, ..., 6 = Saturday)
+    int dayOfWeek = t.tm_wday;
+
+    // Print the day of the week
+  switch(dayOfWeek) {
+    case 0:
+      return ("Sun");
+      break;
+    case 1:
+      return ("Mon");
+      break;
+    case 2:
+      return ("Tue");
+      break;
+    case 3:
+      return ("Wed");
+      break;
+    case 4:
+      return ("Thu");
+      break;
+    case 5:
+      return ("Fri");
+      break;
+    case 6:
+      return ("Sat");
+      break;
+    default:
+      return ("Invalid day");
+      break;
+  }
+
+    
+}
+
+
 String getLocaltime()
 {
     char buffer[32];
