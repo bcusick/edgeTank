@@ -1,21 +1,31 @@
 #include <SPI.h>
 #include <SD.h>
-#include <ArduinoJson.h>
+#include <Arduino_EdgeControl.h>
 
 // Define the chip select pin for the SD card module
-const int chipSelect = 10;
+const int chipSelect = PIN_SD_CS;
 
-// Sensor pins
-const int tempSensorPin = A0;
-const int humSensorPin = A1;
-const int presSensorPin = A2;
-const int lightSensorPin = A3;
-const int soundSensorPin = A4;
+// Define sensor pins
+//TODO
 
 File dataFile;
 
+
+// Sensor data structure
+struct SensorData {
+  int timestamp;
+  int tank1;
+  int tank2;
+  int flowMain;
+
+};
+
 void setup() {
   Serial.begin(9600);
+
+  EdgeControl.begin();
+  // Power on the 3V3 rail for SD Card
+  Power.on(PWR_3V3);
 
   if (!SD.begin(chipSelect)) {
     Serial.println("SD card initialization failed!");
@@ -23,48 +33,64 @@ void setup() {
   }
   Serial.println("SD card initialized.");
 
-  dataFile = SD.open("datalog.json", FILE_WRITE);
-  if (!dataFile) {
-    Serial.println("Failed to open file for writing!");
-    return;
+  
+
+  // Open the file. If it doesn't exist, create it.
+  dataFile = SD.open("datalog.csv", FILE_WRITE);
+  
+  // If the file opened successfully, write the header
+  if (dataFile) {
+    dataFile.println("Time,Sensor1,Sensor2,Sensor3");
+    dataFile.close();
+  } else {
+    Serial.println("Error opening datalog.csv");
   }
-  Serial.println("File opened for writing.");
 }
 
 void loop() {
-  int tempValue = analogRead(tempSensorPin);
-  int humValue = analogRead(humSensorPin);
-  int presValue = analogRead(presSensorPin);
-  int lightValue = analogRead(lightSensorPin);
-  int soundValue = analogRead(soundSensorPin);
+  
 
-  StaticJsonDocument<256> jsonDoc;
-  jsonDoc["timestamp"] = millis();
 
-  JsonObject sensors = jsonDoc.createNestedObject("sensors");
-  sensors["temperature"]["value"] = tempValue;
-  sensors["temperature"]["unit"] = "C";
-  sensors["humidity"]["value"] = humValue;
-  sensors["humidity"]["unit"] = "%";
-  sensors["pressure"]["value"] = presValue;
-  sensors["pressure"]["unit"] = "hPa";
-  sensors["light"]["value"] = lightValue;
-  sensors["light"]["unit"] = "lux";
-  sensors["sound"]["value"] = soundValue;
-  sensors["sound"]["unit"] = "dB";
+  // Read sensor data
+  readSensors();
+  
+  // Log to SD card
+  logDataToSD(data);
 
-  String jsonString;
-  serializeJson(jsonDoc, jsonString);
+  // Wait for a second before the next loop
+  delay(1000);
+}
 
-  Serial.println(jsonString);
+void readSensors() {
+  SensorData data;
+  data.tank1 = readTemperature(); // Replace with actual function
+  data.tank2 = readHumidity(); // Replace with actual function
+  data.flowMain = readPressure(); // Replace with actual function
+  data.timestamp = time(NULL);
+}
 
-  if (dataFile) {
-    dataFile.println(jsonString);
-    dataFile.flush();
-    Serial.println("Data written to SD card.");
-  } else {
-    Serial.println("Error writing to file!");
-  }
+///TBD
+float readTemperature() {
+    // Read temperature from sensor and return
+}
 
-  delay(1000); // Wait for 1 second before logging again
+float readHumidity() {
+    // Read humidity from sensor and return
+}
+
+
+void logDataToSD(const SensorData &data) {
+    File dataFile = SD.open("datalog.txt", FILE_WRITE);
+    if (dataFile) {
+        dataFile.print(data.timestamp);
+        dataFile.print(",");
+        dataFile.print(data.tank1);
+        dataFile.print(",");
+        dataFile.println(data.tank2);
+        dataFile.print(",");
+        dataFile.println(data.flowMain);
+        dataFile.close();
+    } else {
+        Serial.println("Error opening datalog.txt");
+    }
 }

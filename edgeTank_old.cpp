@@ -194,7 +194,7 @@ void getMKR1Values() {
     Serial.println("Can't find I2C");// if the slave is not connected this happens
 
   } else {  // if the slave is connected this happens
-    Serial.println("MKR1 found");
+    //Serial.println("MKR1 found");
     Wire.requestFrom(MKR1_I2C_ADDR, sizeof(SensorValues_t));
 
     uint8_t buf[200];
@@ -230,5 +230,5 @@ void checkTime() {
     
     Serial.println("RTC updated from Remote");
   }
-
+}
   

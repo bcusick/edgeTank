@@ -1,0 +1,8 @@
+-I have several sensors on an arduino project.  
+here are my requirements:
+
+-read sensor data into a data structure once per second.
+-log this data to SD card once per second.
+-package this one second data into 1 minute chunk and publish to MQTT broker
+
+What is the most efficient way to accomplish? 

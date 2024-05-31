@@ -1,11 +1,10 @@
-#include <Arduino_EdgeControl.h>
 
 constexpr unsigned int adcResolution { 12 };
 
 constexpr pin_size_t inputChannels [] {
     INPUT_420mA_CH01,   //tank 1 vol
     INPUT_420mA_CH02,   //tank 2 vol
-    INPUT_05V_CH01,     //main flowmeter
+    
     
     
 };
@@ -67,9 +66,7 @@ void loop() {
         case INPUT_420mA_CH02: 
             getTankVol(inputChannels[inputChannelIndex]);       //Tank2 Vol 
             break;
-        case INPUT_05V_CH01: 
-            getFlow(inputChannels[inputChannelIndex]);          //Main Flowmeter
-            break;
+        
         
         
         default: break;
@@ -109,19 +106,19 @@ float getTankVol(int pin){ //TBD
 
 /////////////
 
-constexpr float TANK_RADIUS_INCHES = 60.0; //inches
-constexpr float TANK_CROSS_SECTION_AREA = 3.14 * TANK_RADIUS_INCHES * TANK_RADIUS_INCHES; // in^2
-constexpr float PRESSURE_SENSOR_MAX = 100.0;  // Maximum pressure sensor value in psi
-constexpr float SENSOR_OFFSET_HEIGHT = 5.0;  // Sensor offset from tank bottom in inches
-constexpr float PSI_TO_HEIGHT_CONVERSION = 2.31 * 12.0;  // Conversion factor from psi to inches of water
-constexpr float INCHES_CUBIC_TO_GALLONS = 231.0;  // Conversion factor from cubic inches to gallons
-constexpr float CURRENT_LOOP_RESISTOR = 220.0;  // 420ma current loop resistor
+constexpr float TANK_RADIUS_INCHES = 12.6f * 12f / 2f; //radius inches for 12.6' inside diamter tank
+constexpr float TANK_CROSS_SECTION_AREA = 3.14f * TANK_RADIUS_INCHES * TANK_RADIUS_INCHES; // in^2
+constexpr float PRESSURE_SENSOR_MAX = 100.0f;  // Maximum pressure sensor value in psi
+constexpr float SENSOR_OFFSET_HEIGHT = 5.0f;  // Sensor offset from tank bottom in inches
+constexpr float PSI_TO_HEIGHT_CONVERSION = 2.31f * 12.0f;  // Conversion factor from psi to inches of water
+constexpr float INCHES_CUBIC_TO_GALLONS = 231.0f;  // Conversion factor from cubic inches to gallons
+constexpr float CURRENT_LOOP_RESISTOR = 220.0f;  // 420ma current loop resistor
 
 
 float getTankVolume(int pin) {
     float sensorValue = getAverage5vRead(pin);
-    float current_mA = (sensorValue * 1000.0 / CURRENT_LOOP_RESISTOR);  // Convert sensor reading to mA 
-    float pressure = (current_mA - 4.0) * (PRESSURE_SENSOR_MAX / 16.0);  // Convert mA to psi
+    float current_mA = (sensorValue * 1000.0f / CURRENT_LOOP_RESISTOR);  // Convert sensor reading to mA 
+    float pressure = (current_mA - 4.0f) * (PRESSURE_SENSOR_MAX / 16.0f);  // Convert mA to psi
     
     float waterHeight = pressure * PSI_TO_HEIGHT_CONVERSION;  // Convert psi to inches of water column
     waterHeight -= SENSOR_OFFSET_HEIGHT;  // Adjust for sensor location below tank bottom

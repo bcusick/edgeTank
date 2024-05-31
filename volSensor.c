@@ -27,7 +27,7 @@ void loop() {
 }
 
 
-Voltages getAverageAnalogRead(int pin)
+Voltages getAverageAnalogRead(int pin)  //sensor function takes about 7ms 
 {
     constexpr size_t loops { 100 };
     constexpr float toV { 3.3f / float { (1 << adcResolution) - 1 } };
