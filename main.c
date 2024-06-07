@@ -1,83 +1,90 @@
-/**
-  Smart Irrigation System using the Arduino Edge Control - Application Note
-  Name: Edge_Control_Code.ino
-  Purpose: 4 Zones Smart Irrigation System using the Arduino Edge Control with Cloud connectivity using a MKR WiFi 1010.
-
-  @author Christopher Mendez
-*/
 
 #include "Helpers.h"
 #include <Arduino_EdgeControl.h>
 #include <Wire.h>
 #include "shared.hpp"
+#include <SPI.h>
+#include <SD.h>
 
 // The MKR1 board I2C address
 #define EDGE_I2C_ADDR 0x05
 
 /** UI Management **/
 // Button statuses
-enum ButtonStatus : byte {
-  ZERO_TAP,
-  SINGLE_TAP,
-  DOUBLE_TAP,
-  TRIPLE_TAP,
-  QUAD_TAP,
-  LOT_OF_TAPS
+enum ButtonStatus {
+  STATUS_0,
+  STATUS_1,
+  STATUS_2,
+  STATUS_3,
+  STATUS_4
 };
 
-// ISR: count the button taps
+// ISR variables
 volatile byte taps{ 0 };
-// ISR: keep elapsed timings
-volatile unsigned long previousPress{ 0 };
-// ISR: Final button status
-volatile ButtonStatus buttonStatus{ ZERO_TAP };
-
+volatile ButtonStatus buttonStatus{ STATUS_0 };
 volatile bool lcdUpdateNeeded = false;
+volatile unsigned long buttonDownTime = 0;
+volatile bool longPressDetected = false;
+volatile bool buttonPressed = false;
 
-volatile unsigned long gallons = 0;
-volatile unsigned long gallonTimer_prev = 0;
-volatile unsigned long gallonTimer = 0;
-volatile float gpm = 0;
-volatile bool flow_ON = false;
+////Datalogging
+String logName = "test1.txt";
+const int chipSelect = PIN_SD_CS;
+File dataFile;
 
-
-///5V INPUT SETUP
+////5V INPUT SETUP
 constexpr unsigned int adcResolution { 12 };
-constexpr size_t loops { 100 };  //number of readings to average 5V input 
+constexpr size_t loops { 10 };  //number of readings to average 5V input 
 constexpr float toV { 3.3f / float { (1 << adcResolution) - 1 } };  //ADC conversion to Volts
 constexpr float rDiv { 17.4f / ( 10.0f + 17.4f) };  //Voltage divider between MUX and ADC
-constexpr float CURRENT_LOOP_RESISTOR = 220.0f;  // 420ma current loop resisto
+constexpr float calibration5v { 1.017f };  //Voltage divider between MUX and ADC
+constexpr float CURRENT_LOOP_RESISTOR { 220.5f };  // 420ma current loop resisto
 
-/////////////TANKS
-constexpr float TANK_RADIUS_INCHES = 12.6f * 12.0f / 2.0f; //radius inches for 12.6' inside diamter tank
-constexpr float TANK_CROSS_SECTION_AREA = 3.14f * TANK_RADIUS_INCHES * TANK_RADIUS_INCHES; // in^2
-constexpr float PRESSURE_SENSOR_MAX = 15.0f;  // Maximum pressure sensor value in psi
-constexpr float SENSOR_OFFSET_HEIGHT = 0.0f;  // Sensor offset from tank bottom in inches
-constexpr float PSI_TO_HEIGHT_CONVERSION = 2.31f * 12.0f;  // Conversion factor from psi to inches of water
-constexpr float INCHES_CUBIC_TO_GALLONS = 231.0f;  // Conversion factor from cubic inches to gallons
+////TANKS
+constexpr float TANK_RADIUS_INCHES {12.6f * 12.0f / 2.0f}; //radius inches for 12.6' inside diamter tank
+constexpr float TANK_CROSS_SECTION_AREA {3.14f * TANK_RADIUS_INCHES * TANK_RADIUS_INCHES}; // in^2
+constexpr float PRESSURE_SENSOR_MAX {15.0f};  // Maximum pressure sensor value in psi
+constexpr float SENSOR_OFFSET_HEIGHT {0.0f};  // Sensor offset from tank bottom in inches
+constexpr float PSI_TO_HEIGHT_CONVERSION {2.31f * 12.0f};  // Conversion factor from psi to inches of water
+constexpr float INCHES_CUBIC_TO_GALLONS {231.0f};  // Conversion factor from cubic inches to gallons
 ///////////
 
-unsigned long previousMillis = 0;  // will store last time the sensors were updated
+////Flow Sensor
+constexpr float FLOW_SENSOR_MAX {53.0f};  // Maximum flow sensor value in GPM.  Can be set on sensor.
 
-const long interval = 1000;  // interval at which to update sensores (milliseconds)
+unsigned long previousMillis_loop1 {0};  // will store last time the sensors were updated
+unsigned long previousMillis_loop2 {0};  // will store last time the sensors were updated
+const long interval_loop1 {1000};  // interval at which to update sensores (milliseconds)
+const long interval_loop2 {60000};  // interval at which to update log  (milliseconds)
 
-// Valves flow control variables
-bool controlV1 = 1;  //actual status
-bool controlV2 = 1;
-bool controlV3 = 1;
-bool controlV4 = 1;
+////Battery
+float VBat {0};
+const float calBat {1.0455};
 
-// LCD flow control variables
-bool controlLCD = 1;
-int showTimeLCD = 0;
+////Valve Setup
+const int pulseDuration {5000}; //milliseconds 
+const int maxRetries {5};
+int valveRetries {0}; //check FlowSensor against valve status.  throw error after #of retries
+
+////Analog rolling average 
+int readIndex {0};  // The index of the current reading
+const int numReadings {60};  // Number of readings to store for rolling averages
+
+////Schedule
+int currentHour {0};
+
+////Define data structures
+SensorValues_t vals;
+TimeKeeping_t timing;
+TankValues_t tank1;
+TankValues_t tank2;
+Valves_t mainValve;
 
 // Valves On time kepping variables
-int StartTime1, CurrentTime1;
-int StartTime2, CurrentTime2;
-int StartTime3, CurrentTime3;
-int StartTime4, CurrentTime4;
-
-SensorValues_t vals;
+//int StartTime1, CurrentTime1;
+//int StartTime2, CurrentTime2;
+//int StartTime3, CurrentTime3;
+//int StartTime4, CurrentTime4;
 
 
 
@@ -106,28 +113,38 @@ void setup() {
   Serial.print("IO Expander initializazion ");
   if (!Expander.begin()) {
     Serial.println("failed.");
-    Serial.println("Please, be sure to enable gated 3V3 and 5V power rails");
-    Serial.println("via Power.enable3V3() and Power.enable5V().");
   } else Serial.println("succeeded.");
+
+  if (!SD.begin(chipSelect)) {
+    Serial.println("SD card initialization failed!");
+    return;
+  }
+  Serial.println("SD card initialized.");
+
+  dataFile = SD.open(logName, FILE_WRITE);
+  
+  // If the file opened successfully, write the header
+  if (dataFile) {
+    dataFile.println("Time,Tank1,Tank2,GPM,Gallons,Battery");
+    dataFile.close();
+  } else {
+    Serial.println("Error opening log file");
+  }
 
   // Arduino Edge Control ports init
   Input.begin();
   Input.enable();
   Latching.begin();
-
+  //analogReference(V_REF); //2.048V
+  //analogReference(AR_VDD); //3.3V
   analogReadResolution(adcResolution);
-
+  
   //IRQ setups
-  pinMode(IRQ_CH1, INPUT); // Flow meter definition
-  attachInterrupt(digitalPinToInterrupt(IRQ_CH1), gallonCounter, RISING);
-
-  pinMode(POWER_ON, INPUT); // LCD button definition
-  attachInterrupt(POWER_ON, buttonPress, RISING);
+  pinMode(POWER_ON, INPUT_PULLUP); // LCD button definition
+  attachInterrupt(digitalPinToInterrupt(POWER_ON), buttonPress, CHANGE);
 
   //clock
   setSystemClock(__DATE__, __TIME__);  // define system time as a reference for the RTC
-
-  //RealTimeClock.setEpoch(1684803771-(3600*4));  // uncomment this to set the RTC time once.
 
   // Init the LCD display
   LCD.begin(16, 2);
@@ -140,103 +157,252 @@ void setup() {
   delay(2000);
 
   LCD.clear();
+
+  for (int i = 0; i < numReadings; i++) {
+    tank1.readings[i] = 0;
+    tank2.readings[i] = 0;
+  }
 }
 
 void loop() {
-  // LCD button taps detector function
-  if (lcdUpdateNeeded) {
+
+  currentHour = getHour();
+  
+  //scheduling 
+  switch (currentHour){
+    case 0:
+      if (!vals.isReset) {
+        vals.gallons = 0;
+        vals.isReset = true;
+      }
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 1:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 2:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 3:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 4:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 5:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 6:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+        //mainValve.fault = 0;
+      }
+      break;
+    case 7:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 8:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 9:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 10:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 11:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 12:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 13:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 14:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 15:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 16:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 17:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 18:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 1;
+      }
+      break;
+    case 19:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 20:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 21:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 22:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      break;
+    case 23:
+      if (mainValve.autoControl) {  //auto control
+        mainValve.cmd = 0;
+      }
+      vals.isReset = false; //prepare for counter reset @ midnight 
+      break;
+  }
+
+  if (buttonPressed && !longPressDetected) {
+    unsigned long now = millis();
+    if (now - buttonDownTime >= 2000) { // Long press check
+      longPressDetected = true;  //feed back to interupt
+         
+      if (buttonStatus == STATUS_0) {  //Long Press on Home Screen
+        if (mainValve.autoControl){
+          mainValve.autoControl = false;
+          LCD.clear();
+          LCD.setCursor(0, 0);
+          LCD.print("Manual Mode");
+          delay(1000);
+          LCD.clear();
+        }
+        else if (!mainValve.autoControl){
+          mainValve.autoControl = true;
+          LCD.clear();
+          LCD.setCursor(0, 0);
+          LCD.print("Auto Mode");
+          delay(1000);
+          LCD.clear();
+        }
+      }
+      if (buttonStatus == STATUS_3 && mainValve.autoControl == false) {  //Long Press on Main Valve Screen
+        mainValve.cmd = !mainValve.cmd; //request opposite cmd
+        mainValve.fault = 0; //reset feedback 
+      }
+    }
+  }
+  
+  unsigned long currentMillis = millis();
+///main update interval
+  if (currentMillis - previousMillis_loop1 >= interval_loop1) {
+    updateSensors();
+    updateGallons();
+    
+    valvesHandler();  //execute open/close and set control flag
+    
+    if (lcdUpdateNeeded) {
     LCD.clear();
     lcdUpdateNeeded = false;
-  }
-  Serial.println(gallons);
-  //detectTaps();
-  //t1++;
-  //t2--;
+    }
 
-  // Different button taps handler
-  switch (buttonStatus) {
-    case ZERO_TAP:  // will execute always the button is not being pressed.
-      timeLCD();
-      break;
+    // Different button taps handler
+    switch (buttonStatus) {
+      case STATUS_0:  
+        timeLCD();
+        break;
 
-    case SINGLE_TAP:  // will execute when the button is pressed once.
-      tankStatusLCD();
-      break;
+      case STATUS_1:  
+        tankStatusLCD();
+        break;
 
-    case DOUBLE_TAP:  // will execute when the button is pressed twice.
-      flowStatusLCD();
-      break;
+      case STATUS_2:  
+        flowStatusLCD();
+        break;
 
-    case TRIPLE_TAP:  // will execute when the button is pressed three times.
-      ValvesStatusLCD();
-      break;
+      case STATUS_3:  
+        ValvesStatusLCD();
+        break;
 
-    case QUAD_TAP:  // will execute when the button is pressed four times.
-      ValvesStatus2LCD();
-      break;
-
-    
-
-    default:
-      Serial.println("Too Many Taps");
-      buttonStatus = ZERO_TAP;
-      break;
+      default:
+        Serial.println("Too Many Taps");
+        buttonStatus = STATUS_0;
+        break;
+    }
+    previousMillis_loop1 = currentMillis;
   }
 
-  // reset the valves accumuldated on time every day at midnight
-  if (getLocalhour() == " 00:00:00") {
-    Serial.println("Resetting accumulators every day");
-    vals.z1_on_time = 0;
-    vals.z2_on_time = 0;
-    vals.z3_on_time = 0;
-    vals.z4_on_time = 0;
-    delay(1000);
+  ///slower loop to log data 
+  if (currentMillis - previousMillis_loop2 >= interval_loop2) {
+    checkValveStatus(); 
+    VBat = Power.getVBat(adcResolution) / calBat;
+
+    //convert to int values before datalog and send to cloud?
+    logDataToSD();
+    previousMillis_loop2 = currentMillis;
   }
-
-  unsigned long currentMillis = millis();
-
-  if (currentMillis - previousMillis >= interval) {
-
-    previousMillis = currentMillis;
-
-    // send local sensors values and retrieve cloud variables status back and forth
-    updateSensors();
-  }
-
-  // activate, deactive and keep time of valves function
-  valvesHandler();
 }
 
 /**
-  Poor-man LCD button debouncing function. 
+  LCD button debouncing function. 
+  Attached to interupt
 */
 void buttonPress() {
-  const auto now = millis();
-
-  if (now - previousPress > 100) {
-    previousPress = now;
-    taps++;
-    if (taps > 4) {
-      taps = 0;
+  unsigned long now = millis();
+  if (digitalRead(POWER_ON) == LOW) { // Button is pressed
+    if (!buttonPressed) { // First press
+      buttonPressed = true;
+      buttonDownTime = now;
+    }
+  } else { // Button is released
+    if (buttonPressed) { // Was previously pressed
+      buttonPressed = false;
+      if (!longPressDetected && (now - buttonDownTime > 100)) { // Debounce check and not a long press
+        taps++;
+        if (taps > 3) {
+          taps = 0;
+        }
+        buttonStatus = static_cast<ButtonStatus>(taps);
+      }
+      longPressDetected = false; // Reset long press detection
     }
     lcdUpdateNeeded = true;
   }
-  buttonStatus = static_cast<ButtonStatus>(taps);
-}
-
-/**
-  Detect and count button taps
-*/
-void detectTaps() {
-  // Timeout to validate the button taps counter
-  //constexpr unsigned int buttonTapsTimeout{ 300 };
-
-  // Set the button status and reset the taps counter when button has been
-  // pressed at least once and button taps validation timeout has been reached.
-  //if (taps > 0 && millis() - previousPress >= buttonTapsTimeout) {
-  buttonStatus = static_cast<ButtonStatus>(taps);
-  
-  
 }
 
 /**
@@ -245,28 +411,23 @@ void detectTaps() {
 */
 void updateSensors() {
 
-  // function that request valves status from the MKR through I2C
-  //getCloudValues();
-
+  //tank1
+  tank1.sensorTotal -= tank1.readings[readIndex];  //remove oldest value
+  tank1.readings[readIndex] = getTankVolume(INPUT_420mA_CH01);
+  tank1.sensorTotal += tank1.readings[readIndex];
+  tank1.level = tank1.sensorTotal / (float)numReadings;
   
-  vals.tankLevel_1 = getTankVolume(INPUT_420mA_CH01);
-  vals.tankLevel_2 = getTankVolume(INPUT_420mA_CH02);
-  
-  //vals.gallons = gallons;
-  //vals.GPM = gpm;
+  //tank2
+  tank2.sensorTotal -= tank2.readings[readIndex];  //remove oldest value
+  tank2.readings[readIndex] = getTankVolume(INPUT_420mA_CH02);
+  tank2.sensorTotal += tank2.readings[readIndex];
+  tank2.level = tank2.sensorTotal / (float)numReadings;
 
-  //calculate GPM
+  //flowmeter
+  vals.gpm = getFlow(INPUT_420mA_CH03);
 
+  readIndex = (readIndex + 1) % numReadings;
 
-  //vals.z1_on_time;  //doesn't do anything
-  //vals.z2_on_time;
-  //vals.z3_on_time;
-  //vals.z4_on_time;
-
-  //sendValues(&vals);
-
-  // Uncomment this function to read in the serial monitor the values received by the I2C communication
-  //logValues(&vals);
 }
 
 /**
@@ -276,56 +437,12 @@ void updateSensors() {
   */
   void logValues(SensorValues_t *values) {
     char telem_buf[200];
-    sprintf(telem_buf, "Zone 1: %d, Zone 2: %d, Zone 3: %d, Zone 4: %d, Timer 1: %d,Timer 2: %d,Timer 3: %d,Timer 4: %d, Water Level: %.2f",
-            values->z1_local, values->z2_local, values->z3_local, values->z4_local, values->z1_count, values->z2_count, values->z3_count, values->z4_count, values->water_level_local);
+    //sprintf(telem_buf, "Zone 1: %d, Zone 2: %d, Zone 3: %d, Zone 4: %d, Timer 1: %d,Timer 2: %d,Timer 3: %d,Timer 4: %d, Water Level: %.2f",
+            //values->z1_local, values->z2_local, values->z3_local, values->z4_local, values->z1_count, values->z2_count, values->z3_count, values->z4_count, values->water_level_local);
 
     Serial.println(telem_buf);
   }
 
-/**
-  Function to request a valves and variables update from the MKR.
-*/
-
-void getCloudValues() {
-
-  Wire.beginTransmission(EDGE_I2C_ADDR);  //slave's 7-bit I2C address
-
-  // asking if the MKR board is connected to be able to communicate
-  byte busStatus = Wire.endTransmission();
-
-  if (busStatus != 0) {  // if the slave is not connected this happens
-
-  } else {  // if the slave is connected this happens
-
-    Wire.requestFrom(EDGE_I2C_ADDR, sizeof(SensorValues_t));
-
-    uint8_t buf[200];
-    for (uint8_t i = 0; i < sizeof(SensorValues_t); i++)
-      if (Wire.available())
-        buf[i] = Wire.read();
-
-    SensorValues_t *values = (SensorValues_t *)buf;
-
-    vals.z1_local = values->z1_local;
-    vals.z2_local = values->z2_local;
-    vals.z3_local = values->z3_local;
-    vals.z4_local = values->z4_local;
-
-    if (values->z1_count > 0 || values->z2_count > 0 || values->z3_count > 0 || values->z4_count > 0) {
-      Serial.println("There's an active timer");
-      showTimeLCD = 1;  // instead of showing valves status in the LCD, shows the countdown timers.
-    } else {
-      Serial.println("There's not an active timer");
-      showTimeLCD = 0;  // show the valves satus in the LCD.
-    }
-
-    // convert seconds to minutes (these variables store the countdown timers)
-    vals.z1_count = values->z1_count / 60.0;
-    vals.z2_count = values->z2_count / 60.0;
-    vals.z3_count = values->z3_count / 60.0;
-    vals.z4_count = values->z4_count / 60.0;
-  }
-}
 
 /**
   Function that sends the local sensors values through I2C to the MKR
@@ -355,214 +472,6 @@ void writeBytes(uint8_t *buf, uint8_t len) {
   Function that reads the valves values received from the MKR and controls them,
   measures the ON time of each one and update their status on the LCD screen.
 */
-void valvesHandler() {
-
-  if (vals.z1_local == 1 && controlV1 == 1) {
-    Serial.println("Opening Valve 1");
-    LCD.clear();
-    LCD.setCursor(1, 0);
-    LCD.print("Opening Valve");
-    LCD.setCursor(7, 1);
-    LCD.print("#1");
-    controlLCD = 1;
-    Latching.channelDirection(LATCHING_OUT_1, NEGATIVE);
-    Latching.strobe(4500);
-    StartTime1 = time(NULL);
-    controlV1 = 0;
-    LCD.clear();
-  } else if (vals.z1_local == 0 && controlV1 == 0) {
-    Serial.println("Closing Valve 1");
-    LCD.clear();
-    LCD.setCursor(1, 0);
-    LCD.print("Closing Valve");
-    LCD.setCursor(7, 1);
-    LCD.print("#1");
-    controlLCD = 1;
-    Latching.channelDirection(LATCHING_OUT_1, POSITIVE);
-    Latching.strobe(4500);
-    CurrentTime1 = time(NULL);
-    Serial.print("V1 On Time: ");
-    vals.z1_on_time += (CurrentTime1 - StartTime1) / 60.0;
-    Serial.println(vals.z1_on_time);
-    controlV1 = 1;
-    LCD.clear();
-  }
-
-  if (vals.z2_local == 1 && controlV2 == 1) {
-    Serial.println("Opening Valve 2");
-    LCD.clear();
-    LCD.setCursor(1, 0);
-    LCD.print("Opening Valve");
-    LCD.setCursor(7, 1);
-    LCD.print("#2");
-    controlLCD = 1;
-    Latching.channelDirection(LATCHING_OUT_3, NEGATIVE);
-    Latching.strobe(4500);
-    StartTime2 = time(NULL);
-    controlV2 = 0;
-    LCD.clear();
-  } else if (vals.z2_local == 0 && controlV2 == 0) {
-    Serial.println("Closing Valve 2");
-    LCD.clear();
-    LCD.setCursor(1, 0);
-    LCD.print("Closing Valve");
-    LCD.setCursor(7, 1);
-    LCD.print("#2");
-    controlLCD = 1;
-    Latching.channelDirection(LATCHING_OUT_3, POSITIVE);
-    Latching.strobe(4500);
-    CurrentTime2 = time(NULL);
-    Serial.print("V2 On Time: ");
-    vals.z2_on_time += (CurrentTime2 - StartTime2) / 60.0;
-    Serial.println(vals.z2_on_time);
-    controlV2 = 1;
-    LCD.clear();
-  }
-
-  if (vals.z3_local == 1 && controlV3 == 1) {
-    Serial.println("Opening Valve 3");
-    LCD.clear();
-    LCD.setCursor(1, 0);
-    LCD.print("Opening Valve");
-    LCD.setCursor(7, 1);
-    LCD.print("#3");
-    controlLCD = 1;
-    Latching.channelDirection(LATCHING_OUT_5, NEGATIVE);
-    Latching.strobe(4500);
-    StartTime3 = time(NULL);
-    controlV3 = 0;
-    LCD.clear();
-  } else if (vals.z3_local == 0 && controlV3 == 0) {
-    Serial.println("Closing Valve 3");
-    LCD.clear();
-    LCD.setCursor(1, 0);
-    LCD.print("Closing Valve");
-    LCD.setCursor(7, 1);
-    LCD.print("#3");
-    controlLCD = 1;
-    Latching.channelDirection(LATCHING_OUT_5, POSITIVE);
-    Latching.strobe(4500);
-    CurrentTime3 = time(NULL);
-    Serial.print("V3 On Time: ");
-    vals.z3_on_time += (CurrentTime3 - StartTime3) / 60.0;
-    Serial.println(vals.z3_on_time);
-    controlV3 = 1;
-    LCD.clear();
-  }
-
-  if (vals.z4_local == 1 && controlV4 == 1) {
-    Serial.println("Opening Valve 4");
-    LCD.clear();
-    LCD.setCursor(1, 0);
-    LCD.print("Opening Valve");
-    LCD.setCursor(7, 1);
-    LCD.print("#4");
-    controlLCD = 1;
-    Latching.channelDirection(LATCHING_OUT_7, NEGATIVE);
-    Latching.strobe(4500);
-    StartTime4 = time(NULL);
-    controlV4 = 0;
-    LCD.clear();
-  } else if (vals.z4_local == 0 && controlV4 == 0) {
-    Serial.println("Closing Valve 4");
-    LCD.clear();
-    LCD.setCursor(1, 0);
-    LCD.print("Closing Valve");
-    LCD.setCursor(7, 1);
-    LCD.print("#4");
-    controlLCD = 1;
-    Latching.channelDirection(LATCHING_OUT_7, POSITIVE);
-    Latching.strobe(4500);
-    CurrentTime4 = time(NULL);
-    Serial.print("V4 On Time: ");
-    vals.z4_on_time += (CurrentTime4 - StartTime4) / 60.0;
-    Serial.println(vals.z4_on_time);
-    controlV4 = 1;
-    LCD.clear();
-  }
-}
-
-
-
-/**
-  Function that shows each valve current status on the LCD screen.
-*/
-void ValvesStatusLCD() {
-  String msg, msg2;
-
-  msg = "Main: ";
-  msg += "OPEN";
-  //msg += " 2:";
-  //msg += "CLOSE";
-  msg2 = "Dev5: ";
-  msg2 += "CLOSED";
-  //msg2 += "  4:";
- // msg2 += vals.z4_local;
-/*
-  msg = "Main:";
-  msg += vals.z1_local;
-  msg += "    Dev5:";
-  msg += vals.z2_local;
-  msg2 = "LTerr:";
-  msg2 += vals.z3_local;
-  msg2 += "  LCont:";
-  msg2 += vals.z4_local;
-*/
-  //LCD.clear();
-  LCD.setCursor(0, 0);
-  //LCD.print("Valves: ");
-  LCD.print(msg);
-  LCD.setCursor(0, 1);
-  LCD.print(msg2);
-}
-
-void ValvesStatus2LCD() {
-  String msg, msg2;
-
-  msg = "L Cont: ";
-  msg += "CLOSED";
-  //msg += " 2:";
-  //msg += "CLOSE";
-  msg2 = "L Terr: ";
-  msg2 += "CLOSED";
-  //msg2 += "  4:";
- // msg2 += vals.z4_local;
-/*
-  msg = "Main:";
-  msg += vals.z1_local;
-  msg += "    Dev5:";
-  msg += vals.z2_local;
-  msg2 = "LTerr:";
-  msg2 += vals.z3_local;
-  msg2 += "  LCont:";
-  msg2 += vals.z4_local;
-*/
-  //LCD.clear();
-  LCD.setCursor(0, 0);
-  //LCD.print("Valves: ");
-  LCD.print(msg);
-  LCD.setCursor(0, 1);
-  LCD.print(msg2);
-}
-
-
-/**
-  Function that shows Tank Vol and Flow on the LCD screen.
-*/
-void tankStatusLCD() {
-
-  char line1[16];
-  char line2[16];
-  
-  sprintf(line1, "Tank1: %5.0f gal", vals.tankLevel_1);  // use sprintf() to compose the string line1
-  sprintf(line2, "Tank2: %5.0f gal", vals.tankLevel_2);  // use sprintf() to compose the string line2
-  
-  LCD.setCursor(0, 0);
-  LCD.print(line1);
-  LCD.setCursor(0, 1);
-  LCD.print(line2);
-
-}
 
 void timeLCD() {
 
@@ -575,24 +484,68 @@ void timeLCD() {
   LCD.setCursor(0, 1);
   LCD.print("Vineyards");
 
-  LCD.setCursor(11, 1);
+  LCD.setCursor(13, 1);
   LCD.print(getDay());
 }
 
-void flowStatusLCD() {
-  char line1[16];
-  char line2[16];
+void tankStatusLCD() {
   
-  sprintf(line1, "today: %5d gal", gallons);  // use sprintf() to compose the string line2
-  sprintf(line2, "Flow:  %5.0f GPM", gpm);  // use sprintf() to compose the string line1
+  char line1[17]; // Extra space for the null terminator
+  char line2[17]; // Extra space for the null terminator
+
+  snprintf(line1, sizeof(line1), "Tank1: %5d gal", (int)tank1.level);
+  snprintf(line2, sizeof(line2), "Tank2: %5d gal", (int)tank2.level);
+
+  LCD.setCursor(0, 0);
+  LCD.print(line1);
+  LCD.setCursor(0, 1);
+  LCD.print(line2);
+}
+
+void flowStatusLCD() {
+  
+  char line1[17]; // Extra space for the null terminator
+  char line2[17]; // Extra space for the null terminator
+
+  snprintf(line1, sizeof(line2), "Flow:  %5d GPM", (int)vals.gpm);
+  snprintf(line2, sizeof(line1), "Today: %5d gal", (int)vals.gallons);
   
   LCD.setCursor(0, 0);
   LCD.print(line1);
   LCD.setCursor(0, 1);
   LCD.print(line2);
-
 }
 
+/**
+  Function that shows each valve current status on the LCD screen.
+*/
+void ValvesStatusLCD() {
+  String msg, msg2;
+
+  msg = "Main: ";
+  if (mainValve.fault == 0){
+    msg += "waiting...";
+  }
+  else if (mainValve.cmd == 1 && mainValve.fault == 1){
+    msg += "OPEN";
+  }
+  else if (mainValve.cmd == 0 && mainValve.fault == 1){
+    msg += "CLOSED";
+  }
+  else if (mainValve.fault == 2){
+    msg += "ERROR";
+  }
+  
+  if (mainValve.autoControl) {
+    msg2 = "Auto Control";
+  }else if (!mainValve.autoControl) {
+    msg2 = "Manual Control";
+  }
+  LCD.setCursor(0, 0);
+  LCD.print(msg);
+  LCD.setCursor(0, 1);
+  LCD.print(msg2);
+}
 
 float getTankVolume(int pin) {
     float sensorValue = getAverage5vRead(pin);
@@ -602,47 +555,105 @@ float getTankVolume(int pin) {
     waterHeight -= SENSOR_OFFSET_HEIGHT;  // Adjust for sensor location below tank bottom
     float volumeInCubicInches = waterHeight * TANK_CROSS_SECTION_AREA;  // Volume in cubic inches
     float volumeInGallons = volumeInCubicInches / INCHES_CUBIC_TO_GALLONS;  // Convert cubic inches to gallons
-    
+    if (volumeInGallons < 0) volumeInGallons = 0;
     return volumeInGallons;
 }
 
-///////////
-
-float getFlow(int pin){ //TBD
-    float flow = getAverage5vRead(pin);
-
-
-    return flow;
+float getFlow(int pin){ 
+    float sensorValue = getAverage5vRead(pin);
+    float current_mA = (sensorValue * 1000.0f / CURRENT_LOOP_RESISTOR);  // Convert sensor reading to mA 
+    float flowRate = (current_mA - 4.0f) / 16.0f * FLOW_SENSOR_MAX;  // Convert mA to flow
+    if (flowRate < 0) flowRate = 0; 
+    //Serial.println(flowRate);
+    return flowRate;
 }
 
 float getAverage5vRead(int pin){
-
     int tot { 0 };
     for (auto i = 0u; i < loops; i++)
         tot += Input.analogRead(pin);
-    const auto avg5v = static_cast<float>(tot) * toV / static_cast<float>(loops) / rDiv;
-    
+    float avg5v = (static_cast<float>(tot) / loops) * toV / rDiv / calibration5v;
     return (avg5v);
 }
 
-// Function to be called on interrupt
-  
-void gallonCounter() {
-  const auto now = millis();
-
-  if (now - previousPress > 100) {
-    previousPress = now;
-    gallons++;
-    gallonTimer_prev = gallonTimer;
-    gallonTimer = millis();
-
-    if (flow_ON) {
-        
-      gpm = 60000.0f / (gallonTimer - gallonTimer_prev);  //each ISR is 1 gallon.  convert elasped time to minutes
-        
-    } else {
-        gpm = 0;
-        flow_ON = true;
-    }
+void updateGallons(){
+  unsigned long now = millis();
+  unsigned long elapsed = now - timing.lastGallon;
+  float gallons = vals.gpm / 60000.0f * elapsed;
+  timing.lastGallon = now;
+  if (gallons > 0) { 
+    vals.gallons = vals.gallons + gallons;
   }
 }
+
+void logDataToSD() {
+  File dataFile = SD.open(logName, FILE_WRITE);
+  if (dataFile) {
+      dataFile.print(time(NULL));
+      dataFile.print(",");
+      dataFile.print(tank1.level);
+      dataFile.print(",");
+      dataFile.print(tank2.level);
+      dataFile.print(",");
+      dataFile.print(vals.gpm);
+      dataFile.print(",");
+      dataFile.println(vals.gallons);
+      dataFile.print(",");
+      dataFile.println(VBat);
+      dataFile.close();
+    } else {
+      Serial.println("Error opening log file");
+  }
+}
+
+void checkValveStatus() { //reset status if status and flow don't agree.  Valve handler will retry operation
+  if (mainValve.fault == 0) {
+    if (vals.gpm > 0.1 && mainValve.status == 0) { //valve not actually closed
+      mainValve.status = 1;
+      valveRetries++;
+    } 
+    
+    else if (vals.gpm < 0.1 && mainValve.status == 1) { //valve not actually open
+      mainValve.status = 0;
+      valveRetries++;  
+    }
+    else {
+      mainValve.fault = 1;
+      valveRetries = 0;
+      lcdUpdateNeeded = true;
+    }
+  }
+
+  if (valveRetries >= maxRetries) {
+    mainValve.fault = 2;
+    valveRetries = 0;
+    Serial.println("Valve Fault");
+  } 
+  if (valveRetries > 0) {
+    Serial.print("Valve retry #");
+    Serial.println(valveRetries);
+  }
+}
+
+void valvesHandler() {
+  if (mainValve.cmd == 1 && mainValve.status == 0) {
+    Serial.println("Opening Main");
+    LCD.clear();
+    LCD.setCursor(1, 0);
+    LCD.print("Opening Main");
+    Latching.channelDirection(LATCHING_OUT_1, NEGATIVE);
+    Latching.strobe(pulseDuration);
+    mainValve.status = 1;  //set status to open
+    LCD.clear();
+  } else if (mainValve.cmd == 0 && mainValve.status == 1) {
+    Serial.println("Closing Main");
+    LCD.clear();
+    LCD.setCursor(1, 0);
+    LCD.print("Closing Main");
+    Latching.channelDirection(LATCHING_OUT_1, POSITIVE);
+    Latching.strobe(pulseDuration);
+    mainValve.status = 0;  //set status to closed
+    LCD.clear();
+  }
+}
+

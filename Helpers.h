@@ -31,8 +31,6 @@ time_t buildDateTimeToSystemTime(const String date, const String time, bool loca
             seconds -= (3600UL) * tz;
         }
     }
-    //Serial.println("build seconds: ");
-    //Serial.println(seconds);
     return seconds;
 }
 
@@ -45,48 +43,49 @@ String getLocalhour()
     return String(buffer);
 }
 
+int getHour() {
+    tm t;
+    _rtc_localtime(time(NULL), &t, RTC_FULL_LEAP_YEAR_SUPPORT);
+    int hour = t.tm_hour;
+    return hour;
+}
 
 String getDay()
 {
-    //char buffer[32];
     tm t;
     _rtc_localtime(time(NULL), &t, RTC_FULL_LEAP_YEAR_SUPPORT);
-    //strftime(buffer, 32, "%k:%M:%S", &t);
-
+    
     // Get the day of the week (0 = Sunday, 1 = Monday, ..., 6 = Saturday)
     int dayOfWeek = t.tm_wday;
 
     // Print the day of the week
   switch(dayOfWeek) {
     case 0:
-      return ("Sun");
+      return ("SUN");
       break;
     case 1:
-      return ("Mon");
+      return ("MON");
       break;
     case 2:
-      return ("Tue");
+      return ("TUE");
       break;
     case 3:
-      return ("Wed");
+      return ("WED");
       break;
     case 4:
-      return ("Thu");
+      return ("THU");
       break;
     case 5:
-      return ("Fri");
+      return ("FRI");
       break;
     case 6:
-      return ("Sat");
+      return ("SAT");
       break;
     default:
-      return ("Invalid day");
+      return ("ERR");
       break;
-  }
-
-    
+  }   
 }
-
 
 String getLocaltime()
 {
@@ -113,26 +112,14 @@ void setSystemClock(String buildDate, String buildTime)
 {
     // Retrieve clock time from compile date...
     auto buildDateTime = buildDateTimeToSystemTime(buildDate, buildTime, true, 2);
-    Serial.println(buildDateTime);
+    //Serial.println(buildDateTime);
     // ... ore use the one from integrated RTC.
     auto rtcTime = time(NULL);
-    Serial.println(rtcTime);
+    //Serial.println(rtcTime);
     // Remember to connect at least the CR2032 battery
     // to keep the RTC running.
     auto actualTime = rtcTime > buildDateTime ? rtcTime : buildDateTime;
 
     // Set both system time
     set_time(actualTime);
-
-    /*
-    rtcTime = time(NULL);
-    Serial.println(rtcTime);
-    
-    Serial.print("Compile Date and Time: ");
-    Serial.println(getLocaltime(buildDateTime));
-    Serial.print("RTC Date and Time:     ");
-    Serial.println(getLocaltime(rtcTime));
-    Serial.print("System Clock:          ");
-    Serial.println(getLocaltime());
-    */
 }
