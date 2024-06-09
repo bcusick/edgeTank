@@ -7,7 +7,7 @@ unsigned long lastPress {0};
 const int debounce {200};
 
 ////Valve Setup
-const int pulseDuration {5000}; //milliseconds 
+const int pulseDuration {10000}; //milliseconds 
 
 typedef struct {
   bool status   = false; //false is closed
@@ -81,15 +81,13 @@ void buttonPress() {
   }
 }
 
-
-
 void valvesHandler() {
   if (mainValve.cmd == 1 && mainValve.status == 0) {
     Serial.println("Opening Main");
     LCD.clear();
     LCD.setCursor(1, 0);
     LCD.print("Opening Main");
-    Latching.channelDirection(LATCHING_OUT_1, NEGATIVE);
+    Latching.channelDirection(LATCHING_OUT_1, POSITIVE);
     Latching.strobe(pulseDuration);
     mainValve.status = 1;  //set status to open
     LCD.clear();
@@ -98,7 +96,7 @@ void valvesHandler() {
     LCD.clear();
     LCD.setCursor(1, 0);
     LCD.print("Closing Main");
-    Latching.channelDirection(LATCHING_OUT_1, POSITIVE);
+    Latching.channelDirection(LATCHING_OUT_1, NEGATIVE);
     Latching.strobe(pulseDuration);
     mainValve.status = 0;  //set status to closed
     LCD.clear();

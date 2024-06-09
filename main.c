@@ -62,7 +62,7 @@ float VBat {0};
 const float calBat {1.0455};
 
 ////Valve Setup
-const int pulseDuration {5000}; //milliseconds 
+const int pulseDuration {12000}; //milliseconds 
 const int maxRetries {5};
 int valveRetries {0}; //check FlowSensor against valve status.  throw error after #of retries
 
@@ -597,7 +597,7 @@ void logDataToSD() {
       dataFile.print(",");
       dataFile.print(vals.gpm);
       dataFile.print(",");
-      dataFile.println(vals.gallons);
+      dataFile.print(vals.gallons);
       dataFile.print(",");
       dataFile.println(VBat);
       dataFile.close();
@@ -641,7 +641,7 @@ void valvesHandler() {
     LCD.clear();
     LCD.setCursor(1, 0);
     LCD.print("Opening Main");
-    Latching.channelDirection(LATCHING_OUT_1, NEGATIVE);
+    Latching.channelDirection(LATCHING_OUT_1, POSITIVE);
     Latching.strobe(pulseDuration);
     mainValve.status = 1;  //set status to open
     LCD.clear();
@@ -650,7 +650,7 @@ void valvesHandler() {
     LCD.clear();
     LCD.setCursor(1, 0);
     LCD.print("Closing Main");
-    Latching.channelDirection(LATCHING_OUT_1, POSITIVE);
+    Latching.channelDirection(LATCHING_OUT_1, NEGATIVE);
     Latching.strobe(pulseDuration);
     mainValve.status = 0;  //set status to closed
     LCD.clear();
