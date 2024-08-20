@@ -1,10 +1,10 @@
-
 #include "Helpers.h"
 #include <Arduino_EdgeControl.h>
 #include <Wire.h>
 #include "shared.hpp"
 #include <SPI.h>
 #include <SD.h>
+#include <TimeLib.h>
 
 // The MKR1 board I2C address
 #define EDGE_I2C_ADDR 0x05
@@ -26,6 +26,7 @@ volatile bool lcdUpdateNeeded = false;
 volatile unsigned long buttonDownTime = 0;
 volatile bool longPressDetected = false;
 volatile bool buttonPressed = false;
+volatile bool openRequestSOD = false;
 
 ////Datalogging
 String logName = "test1.txt";
@@ -72,6 +73,14 @@ const int numReadings {60};  // Number of readings to store for rolling averages
 
 ////Schedule
 int currentHour {0};
+int duration {10};
+int openHour {0};
+int openMin {0};
+int closeHour {0};
+int closeMin {0};
+unsigned long openTime {0};
+unsigned long closeTime {0};
+    
 
 ////Define data structures
 SensorValues_t vals;
@@ -162,175 +171,55 @@ void setup() {
     tank1.readings[i] = 0;
     tank2.readings[i] = 0;
   }
+
+  setSystemClock(__DATE__, __TIME__);
+
 }
 
 void loop() {
 
-  currentHour = getHour();
   
-  //scheduling 
-  switch (currentHour){
-    case 0:
-      if (!vals.isReset) {
-        vals.gallons = 0;
-        vals.isReset = true;
-      }
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 1:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 2:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 3:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 4:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 5:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 6:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-        //mainValve.fault = 0;
-      }
-      break;
-    case 7:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 8:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 9:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 10:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 11:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 12:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 13:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 14:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 15:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 16:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 17:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 18:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 1;
-      }
-      break;
-    case 19:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 20:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 21:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 22:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      break;
-    case 23:
-      if (mainValve.autoControl) {  //auto control
-        mainValve.cmd = 0;
-      }
-      vals.isReset = false; //prepare for counter reset @ midnight 
-      break;
-  }
 
-  if (buttonPressed && !longPressDetected) {
-    unsigned long now = millis();
-    if (now - buttonDownTime >= 2000) { // Long press check
-      longPressDetected = true;  //feed back to interupt
-         
-      if (buttonStatus == STATUS_0) {  //Long Press on Home Screen
-        if (mainValve.autoControl){
-          mainValve.autoControl = false;
-          LCD.clear();
-          LCD.setCursor(0, 0);
-          LCD.print("Manual Mode");
-          delay(1000);
-          LCD.clear();
-        }
-        else if (!mainValve.autoControl){
-          mainValve.autoControl = true;
-          LCD.clear();
-          LCD.setCursor(0, 0);
-          LCD.print("Auto Mode");
-          delay(1000);
-          LCD.clear();
-        }
-      }
-      if (buttonStatus == STATUS_3 && mainValve.autoControl == false) {  //Long Press on Main Valve Screen
-        mainValve.cmd = !mainValve.cmd; //request opposite cmd
-        mainValve.fault = 0; //reset feedback 
-      }
-    }
-  }
-  
   unsigned long currentMillis = millis();
 ///main update interval
   if (currentMillis - previousMillis_loop1 >= interval_loop1) {
+
+    Serial.print("current: ");
+    Serial.print(time(NULL));
+    Serial.print(", open: ");
+    Serial.print(openTime);
+    Serial.print(", close: ");
+    Serial.println(closeTime);
+
+    currentHour = getHour(time(NULL));
+    Serial.println(currentHour);
+  
+  
+    //@ midnight reset counters
+    if (currentHour == 0) {
+        if (!vals.isReset) {
+          vals.gallons = 0;
+          vals.isReset = true;
+        }
+    }
+    
+
+    //check for open or close event
+
+    if (openRequestSOD && vals.isReset) {  //button press at start of day, only works once
+      openTime = time(NULL);
+      openHour = getHour(openTime);
+      openMin = getMinute(openTime);
+      closeTime = openTime + duration * 3600;
+      closeHour = getHour(closeTime);
+      closeMin = getMinute(closeTime);
+      mainValve.cmd = 1; 
+      vals.isReset = false; //will reset at midnight
+    }
+
+    if (time(NULL) >= closeTime) {
+      mainValve.cmd = 0;
+    }
     updateSensors();
     updateGallons();
     
@@ -344,7 +233,7 @@ void loop() {
     // Different button taps handler
     switch (buttonStatus) {
       case STATUS_0:  
-        timeLCD();
+        scheduleLCD();
         break;
 
       case STATUS_1:  
@@ -369,7 +258,7 @@ void loop() {
 
   ///slower loop to log data 
   if (currentMillis - previousMillis_loop2 >= interval_loop2) {
-    checkValveStatus(); 
+    //checkValveStatus(); 
     VBat = Power.getVBat(adcResolution) / calBat;
 
     //convert to int values before datalog and send to cloud?
@@ -393,11 +282,7 @@ void buttonPress() {
     if (buttonPressed) { // Was previously pressed
       buttonPressed = false;
       if (!longPressDetected && (now - buttonDownTime > 100)) { // Debounce check and not a long press
-        taps++;
-        if (taps > 3) {
-          taps = 0;
-        }
-        buttonStatus = static_cast<ButtonStatus>(taps);
+        openRequestSOD = true;
       }
       longPressDetected = false; // Reset long press detection
     }
@@ -495,6 +380,19 @@ void tankStatusLCD() {
 
   snprintf(line1, sizeof(line1), "Tank1: %5d gal", (int)tank1.level);
   snprintf(line2, sizeof(line2), "Tank2: %5d gal", (int)tank2.level);
+
+  LCD.setCursor(0, 0);
+  LCD.print(line1);
+  LCD.setCursor(0, 1);
+  LCD.print(line2);
+}
+
+void scheduleLCD() {
+  char line1[17]; // Extra space for the null terminator
+  char line2[17]; // Extra space for the null terminator
+
+  snprintf(line1, sizeof(line1), "OPEN: %2d:%2d", (int)openHour, (int)openMin);
+  snprintf(line2, sizeof(line2), "CLOSE: %2d:%2d", (int)closeHour, (int)closeMin);
 
   LCD.setCursor(0, 0);
   LCD.print(line1);
@@ -655,5 +553,6 @@ void valvesHandler() {
     mainValve.status = 0;  //set status to closed
     LCD.clear();
   }
+  
 }
 

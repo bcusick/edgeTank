@@ -43,11 +43,16 @@ String getLocalhour()
     return String(buffer);
 }
 
-int getHour() {
+int getHour(unsigned long epoch) {
     tm t;
-    _rtc_localtime(time(NULL), &t, RTC_FULL_LEAP_YEAR_SUPPORT);
-    int hour = t.tm_hour;
-    return hour;
+    _rtc_localtime(epoch, &t, RTC_FULL_LEAP_YEAR_SUPPORT);
+    return t.tm_hour;
+}
+
+int getMinute(unsigned long epoch) {
+    tm t;
+    _rtc_localtime(epoch, &t, RTC_FULL_LEAP_YEAR_SUPPORT);
+    return t.tm_min;
 }
 
 String getDay()
