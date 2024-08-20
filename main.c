@@ -23,10 +23,11 @@ enum ButtonStatus {
 volatile byte taps{ 0 };
 volatile ButtonStatus buttonStatus{ STATUS_0 };
 volatile bool lcdUpdateNeeded = false;
-volatile unsigned long buttonDownTime = 0;
-volatile bool longPressDetected = false;
 volatile bool buttonPressed = false;
-volatile bool openRequestSOD = false;
+volatile unsigned long buttonDownTime = 0;
+volatile bool shortPress = false;
+volatile bool longPress = false;
+const unsigned long longPressDuration = 1000; // Duration for long press in milliseconds
 
 ////Datalogging
 String logName = "test1.txt";
@@ -80,21 +81,15 @@ int closeHour {0};
 int closeMin {0};
 unsigned long openTime {0};
 unsigned long closeTime {0};
+bool openRequestSOD = false;
+bool openTimerReset = true;
     
-
 ////Define data structures
 SensorValues_t vals;
 TimeKeeping_t timing;
 TankValues_t tank1;
 TankValues_t tank2;
 Valves_t mainValve;
-
-// Valves On time kepping variables
-//int StartTime1, CurrentTime1;
-//int StartTime2, CurrentTime2;
-//int StartTime3, CurrentTime3;
-//int StartTime4, CurrentTime4;
-
 
 
 /**
@@ -171,19 +166,15 @@ void setup() {
     tank1.readings[i] = 0;
     tank2.readings[i] = 0;
   }
-
-  setSystemClock(__DATE__, __TIME__);
-
 }
 
 void loop() {
-
-  
 
   unsigned long currentMillis = millis();
 ///main update interval
   if (currentMillis - previousMillis_loop1 >= interval_loop1) {
 
+////debugging
     Serial.print("current: ");
     Serial.print(time(NULL));
     Serial.print(", open: ");
@@ -191,35 +182,43 @@ void loop() {
     Serial.print(", close: ");
     Serial.println(closeTime);
 
+////
+
     currentHour = getHour(time(NULL));
-    Serial.println(currentHour);
-  
-  
+    
     //@ midnight reset counters
     if (currentHour == 0) {
         if (!vals.isReset) {
           vals.gallons = 0;
           vals.isReset = true;
+          openTimerReset = true;
         }
     }
     
-
     //check for open or close event
 
-    if (openRequestSOD && vals.isReset) {  //button press at start of day, only works once
-      openTime = time(NULL);
-      openHour = getHour(openTime);
-      openMin = getMinute(openTime);
-      closeTime = openTime + duration * 3600;
-      closeHour = getHour(closeTime);
-      closeMin = getMinute(closeTime);
-      mainValve.cmd = 1; 
-      vals.isReset = false; //will reset at midnight
+    if (buttonStatus == STATUS_0 && shortPress) {  //Short Press on Home Screen
+      shortPress = false;
+      if (openTimerReset){
+        openRequestSOD = true;
+        openTimerReset = false;
+      }
     }
 
-    if (time(NULL) >= closeTime) {
-      mainValve.cmd = 0;
+    if (openRequestSOD) {  //button press at start of day, only works once
+      openTime = time(NULL);
+      closeTime = openTime + 60;
+      mainValve.cmd = 1; 
+      openRequestSOD = false; //reset flag
     }
+
+    if (time(NULL) >= closeTime) {  //check if time has reached closing time
+      mainValve.cmd = 0; 
+      openTimerReset = true;
+      openTime = 0;
+      closeTime = 0;
+    }
+
     updateSensors();
     updateGallons();
     
@@ -267,12 +266,11 @@ void loop() {
   }
 }
 
-/**
-  LCD button debouncing function. 
-  Attached to interupt
-*/
+
+
 void buttonPress() {
   unsigned long now = millis();
+
   if (digitalRead(POWER_ON) == LOW) { // Button is pressed
     if (!buttonPressed) { // First press
       buttonPressed = true;
@@ -280,14 +278,19 @@ void buttonPress() {
     }
   } else { // Button is released
     if (buttonPressed) { // Was previously pressed
-      buttonPressed = false;
-      if (!longPressDetected && (now - buttonDownTime > 100)) { // Debounce check and not a long press
-        openRequestSOD = true;
+      unsigned long pressDuration = now - buttonDownTime;
+
+      if (pressDuration > 100) { // Debounce check passed
+        if (pressDuration >= longPressDuration) {
+          longPress = true;  // Detected a long press
+        } else {
+          shortPress = true; // Detected a short press
+        }
+        lcdUpdateNeeded = true;
       }
-      longPressDetected = false; // Reset long press detection
+      buttonPressed = false;
     }
-    lcdUpdateNeeded = true;
-  }
+  } 
 }
 
 /**
@@ -388,6 +391,10 @@ void tankStatusLCD() {
 }
 
 void scheduleLCD() {
+  openHour = getHour(openTime);
+  openMin = getMinute(openTime);
+  closeHour = getHour(closeTime);
+  closeMin = getMinute(closeTime);
   char line1[17]; // Extra space for the null terminator
   char line2[17]; // Extra space for the null terminator
 
